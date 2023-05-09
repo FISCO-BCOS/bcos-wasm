@@ -619,7 +619,14 @@ impl evmc_vm::EvmcVm for BcosWasm {
             }
         };
         let future = func.call_async(&mut store, ());
-        match task::block_on(future) {
+        let ret = task::block_on(future);
+        let env = env_interface.lock().unwrap();
+        // get output from env_interface
+        let output = env.get_output();
+        if env.reverted() {
+            ret = evmc_vm::ExecutionResult::new(evmc_status_code::EVMC_REVERT, 0, 0, Some(output));
+        }
+        match ret {
             Ok(ret) => ret,
             Err(e) => {
                 error!("Failed to call {} function: {}", call_name, e);
@@ -634,21 +641,15 @@ impl evmc_vm::EvmcVm for BcosWasm {
             );
             start = Instant::now();
         }
-        let env = env_interface.lock().unwrap();
-        // get output from env_interface
-        let output = env.get_output();
         let ret;
-        if !env.reverted() {
-            WASM_MODULE_CACHE.lock().unwrap().put(dest, module.clone());
-            let gas_left = env.get_gas_left(&mut store).unwrap();
-            if kind == evmc_call_kind::EVMC_CREATE {
-                ret = evmc_vm::ExecutionResult::success(gas_left, 0, Some(code));
-            } else {
-                ret = evmc_vm::ExecutionResult::success(gas_left, 0, Some(output));
-            }
+        WASM_MODULE_CACHE.lock().unwrap().put(dest, module.clone());
+        let gas_left = env.get_gas_left(&mut store).unwrap();
+        if kind == evmc_call_kind::EVMC_CREATE {
+            ret = evmc_vm::ExecutionResult::success(gas_left, 0, Some(code));
         } else {
-            ret = evmc_vm::ExecutionResult::new(evmc_status_code::EVMC_REVERT, 0, 0, Some(output));
+            ret = evmc_vm::ExecutionResult::success(gas_left, 0, Some(output));
         }
+    
         if log_enabled!(Level::Debug) {
             debug!(
                 "prepare result elapsed: {:?} μs",
